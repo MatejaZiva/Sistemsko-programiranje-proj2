@@ -11,7 +11,6 @@ namespace Sistemsko_programiranje_projekat1
     {
         public string? id { get; set; }
         public int? completeness { get; set; }
-        public string? link { get; set; }
         public List<string>? dcDescription { get; set; }
         public List<string>? title { get; set; }
         public List<string>? dataProvider { get; set; }

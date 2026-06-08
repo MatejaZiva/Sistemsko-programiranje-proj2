@@ -17,6 +17,8 @@ namespace Sistemsko_programiranje_projekat1
         {
             bool optionalToAdd = false;
             bool reloadIfChangeHappens = true;
+            Console.WriteLine(Directory.GetCurrentDirectory());  
+
             var builder = new ConfigurationBuilder().SetBasePath(Directory.GetCurrentDirectory())
                 .AddJsonFile("appsettings.json",optionalToAdd,reloadIfChangeHappens).Build();
             

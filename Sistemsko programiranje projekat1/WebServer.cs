@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Net;
 using System.Net.Http.Json;
@@ -16,6 +17,8 @@ namespace Sistemsko_programiranje_projekat1
         public Cache cache;
         public Europeana api;
         public ConcurrentDictionary<string, SemaphoreSlim> queryE;
+        private CancellationTokenSource cls = new();
+        private CancellationToken gracefulExitToken;
 
         public WebServer(AppSettings settings, string address)
         {
@@ -23,10 +26,19 @@ namespace Sistemsko_programiranje_projekat1
             listener.Prefixes.Add($"http://localhost:{settings.port}/");
             api = new Europeana(address, settings);
             cache = new Cache(settings.maxCacheSize);
+            cache.startCleanCache();
             queryE = new ConcurrentDictionary<string, SemaphoreSlim>();
+            gracefulExitToken = cls.Token;
         }
 
-        public void startTheServer()
+        private void gracefulExit()
+        {
+            Logger.Log("The server is gracefully shutting down");
+            cls.Cancel();
+            listener.Stop();
+            listener.Close();
+        }
+        public async Task asyncStartTheServer()
         {
             try
             {
@@ -38,19 +50,44 @@ namespace Sistemsko_programiranje_projekat1
                 Console.WriteLine("The server couldn't start " + e.Message);
             }
 
+            Task.Run(() => 
+            {
+                while(Console.ReadKey(true).Key != ConsoleKey.Z){}
+                gracefulExit();
+                
+            });
+
             while (true)
             {
-                //ovde je main Thread i konstanto ceka za neku query i salje ga European-i 
-                var context = listener.GetContext();
-                ThreadPool.QueueUserWorkItem(handleRequest, context);
+                //ovde je main Thread i konstanto ceka za neku query i salje ga European-i
+                try
+                {
+                    var context = await listener.GetContextAsync();
+                    var _ = Task.Run(() => asyncHandleRequest(context));
+                }
+                catch(HttpListenerException e)
+                {
+                  break;
+                }
+                catch(ObjectDisposedException e)
+                {
+                    break;
+                }
+                catch (Exception e)
+                {
+                    Logger.Log("Something has went wrong with the listener");
+                }
             }
         }
 
 
-        public void handleRequest(Object? obj)
+        public async Task asyncHandleRequest(Object? obj)
         {
+
+            gracefulExitToken.ThrowIfCancellationRequested();
             if (obj is not HttpListenerContext context)
                 return;
+
             HttpListenerRequest request = context.Request;
 
             //kada se napravi klijent sa browser-a request on zbog nekog razloga na pravi dva requesta
@@ -70,7 +107,7 @@ namespace Sistemsko_programiranje_projekat1
                     + "<button type=\"submit\">Search</button>"
                     + "</form>"
                 );
-                sendDataToClient(page, context, 200);
+                await sendDataToClient(null, context, 200,page);
                 return;
             }
 
@@ -83,6 +120,7 @@ namespace Sistemsko_programiranje_projekat1
                 query += "&";
             }
 
+            string withoutKeyQuery = query;
             query += $"wskey={api.apiKey}";
 
             String jsonDataAsString = String.Empty;
@@ -90,39 +128,37 @@ namespace Sistemsko_programiranje_projekat1
 
 
             //Odma proveri u kes da li postoji
-            if (cache.checkForKey(query))
+            if (cache.checkForKey(query,out mapper))
             {
                 Logger.Log("The query was found in the cache");
-                mapper = cache.getDataFromCache(query);
-                string prettyJson = JsonSerializer.Serialize(mapper, new JsonSerializerOptions { WriteIndented = true });
-                string responseHtml = RenderJsonPage(prettyJson);
-                WebServer.sendDataToClient(responseHtml, context, 200);
+                await sendDataToClient(mapper, context, 200);
                 return;
             }
 
             //Posto nema u kes onda mora da vidi dal postoji semafor za njega
-
-            SemaphoreSlim mainSem = queryE.GetOrAdd(query, (query) => new SemaphoreSlim(1));
+            SemaphoreSlim semForQuery = queryE.GetOrAdd(query, (query) => new SemaphoreSlim(1));
             int codeSend;
-            mainSem.Wait();
+            await semForQuery.WaitAsync(gracefulExitToken);
             
             try
             {
-                if (!cache.checkForKey(query))
+                if (!cache.checkForKey(query,out mapper))
                 {
 
                     Logger.Log("The query wasn't found in the cache");
 
-                    var response = api.client.GetAsync(query).Result;
+                    var response = await api.client.GetAsync(query,gracefulExitToken);
 
                     if (response.IsSuccessStatusCode == false)
                     {
                         codeSend = 500;
-                        sendDataToClient("Failure", context, codeSend);
+                        await sendDataToClient(null, context, codeSend, "<p>Failure while fetching from Europeana.</p>\"");
                         throw new Eexceptions("The GET method has failed", codeSend);
+                        return;
                     }
 
-                    jsonDataAsString = response.Content.ReadAsStringAsync().Result;
+                    jsonDataAsString = await response.Content.ReadAsStringAsync();
+                    //Za searilizaciju ne bih rekao da treba Task posto kao sta ce ti MIHALJO
                     mapper = JsonSerializer.Deserialize<EuropeanaMapper>(jsonDataAsString);
                     if (mapper == null)
                     {
@@ -145,25 +181,23 @@ namespace Sistemsko_programiranje_projekat1
                 {
                     Logger.Log("The query was found in the cache");
                     codeSend = 200;
-                    mapper = cache.getDataFromCache(query);
                 }
 
                 string responseHtml;
-                if (codeSend == 200)
+                if (codeSend == 404)
                 {
-                    string prettyJson = JsonSerializer.Serialize(mapper, new JsonSerializerOptions { WriteIndented = true });
-                    responseHtml = RenderJsonPage(prettyJson);
-                }
-                else if (codeSend == 404)
-                {
-                    responseHtml = CreateHtmlResponse("No results found", $"<p>The query returned no results.</p><p><strong>{WebUtility.HtmlEncode(request.QueryString["query"])}</strong></p>");
+                    responseHtml = $"The query: {withoutKeyQuery.Remove(withoutKeyQuery.Length - 1)} is not valid";
                 }
                 else
                 {
-                    responseHtml = CreateHtmlResponse("Failure", "<p>Failure while fetching from Europeana.</p>");
+                    responseHtml =  "<p>Failure while fetching from Europeana.</p>";
                 }
 
-                WebServer.sendDataToClient(responseHtml, context, codeSend);
+                await sendDataToClient(mapper, context, codeSend,responseHtml);
+            }
+            catch(OperationCanceledException e)
+            {
+                Logger.Log("AAA");
             }
             catch (Eexceptions e)
             {
@@ -175,20 +209,35 @@ namespace Sistemsko_programiranje_projekat1
             }
             finally
             {
-                mainSem.Release();
+                semForQuery.Release();
+                if (semForQuery.CurrentCount == 1)
+                {
+                    queryE.TryRemove(query, out _);
+                }
             }
 
         }
 
 
-        public static void sendDataToClient(string dataToSend,HttpListenerContext context,int statusCode)
+        public async Task sendDataToClient(EuropeanaMapper mapper,HttpListenerContext context,int statusCode,string response = " ")
         {
-            byte[] buffer = Encoding.UTF8.GetBytes(dataToSend);
-            context.Response.ContentType = "text/html";
-            context.Response.ContentLength64 = buffer.Length;
             context.Response.StatusCode = statusCode;
-            context.Response.OutputStream.Write(buffer,0,buffer.Length);
+            if (statusCode == 200)
+            {
+                context.Response.ContentType = "application/json";
+                await JsonSerializer.SerializeAsync(context.Response.OutputStream, mapper, new JsonSerializerOptions { WriteIndented = true }, gracefulExitToken);
+            }   
+            else
+            {
+                context.Response.ContentType = "text/html; charset=utf-8";
+
+                byte[] buffer = Encoding.UTF8.GetBytes(response);
+                context.Response.ContentLength64 = buffer.Length;
+
+                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length, gracefulExitToken);
+            }
             context.Response.Close();
+
         }
 
         private static string RenderJsonPage(string json)
