@@ -7,7 +7,7 @@
 proveri generalno kod i sve logiku ja bih rekao da je okej i da sklonio sam onaj tvoj lep html jer isk mora dosta se smaram sa tim,
 posto sad saljemo podatke po chunks ne pravimo json pa saljemo nego odma saljemo objekat
 */
-
+//Video sam od nekih isto da imaju kao neku request QUeue, moze ako oces bacis oko na cs pa udjes rezultati projekta 2 deo i udjes na nekih sto su predali
 //Dodaj ContinueWith negde treba se to doda
 //I generalno proveri sve jer nisam nesto puno proveo vremena a bilo bi lepo da dobije 100 poena POSTO SMO 3 GODINA RI
 //Thank you pooky bear <33333
