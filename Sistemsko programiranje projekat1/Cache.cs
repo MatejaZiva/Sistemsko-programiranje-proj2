@@ -82,9 +82,9 @@ namespace Sistemsko_programiranje_projekat1
                 cleanUpTask = Task.Run(async () =>
                 {
 
-                    var timer = new PeriodicTimer(TimeSpan.FromMinutes(5));
+                    var timer = new PeriodicTimer(TimeSpan.FromSeconds(25));
 
-                    while(await timer.WaitForNextTickAsync(cToken.Token))
+                    while (await timer.WaitForNextTickAsync(cToken.Token))
                     {
                         cleanCache();
                     }
@@ -96,16 +96,19 @@ namespace Sistemsko_programiranje_projekat1
             }
         }
 
-
         private void cleanCache()
         {
             lockSlim.EnterWriteLock();
             try
             {
-                listOfKeys.Clear();
-                cache.Clear();
-                Logger.Log("The cache was successfully cleaned");
+                if (listOfKeys.Count > 0)
+                {
+                    string oldestKey = listOfKeys.Dequeue();
+                    cache.Remove(oldestKey);
+                    Logger.Log($"The oldest cache item was successfully cleaned : {oldestKey}");
+                }
             }
+
             catch (Exception e)
             {
                 Console.WriteLine(e.Message);

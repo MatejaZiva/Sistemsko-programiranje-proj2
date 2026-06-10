@@ -52,7 +52,7 @@ namespace Sistemsko_programiranje_projekat1
                 Console.WriteLine("The server couldn't start " + e.Message);
             }
 
-            var keyboardTask = Task.Run(() =>
+            var keyboardTask = Task.Run(() => //mozda ovde moze thread
             {
                 while (Console.ReadKey(true).Key != ConsoleKey.Z) { }
                 gracefulExit();
@@ -112,7 +112,7 @@ namespace Sistemsko_programiranje_projekat1
                 }
                 try
                 {
-                    await Task.WhenAll(toWait);
+                    await Task.WhenAll(toWait); //WaitAll(blokirajuce)? grupise sve taskove i vraca jedan task koji se zavrsi samo kad se svi taskovi unutar njega zavrse
                 }
                 catch (Exception e)
                 {
