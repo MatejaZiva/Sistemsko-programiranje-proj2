@@ -8,6 +8,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Diagnostics; //za stopwatch
 
 namespace Sistemsko_programiranje_projekat1
 {
@@ -50,11 +51,11 @@ namespace Sistemsko_programiranje_projekat1
                 Console.WriteLine("The server couldn't start " + e.Message);
             }
 
-            Task.Run(() => 
+            Task.Run(() =>
             {
-                while(Console.ReadKey(true).Key != ConsoleKey.Z){}
+                while (Console.ReadKey(true).Key != ConsoleKey.Z) { }
                 gracefulExit();
-                
+
             });
 
             while (true)
@@ -65,17 +66,19 @@ namespace Sistemsko_programiranje_projekat1
                     var context = await listener.GetContextAsync();
                     var _ = Task.Run(() => asyncHandleRequest(context));
                 }
-                catch(HttpListenerException e)
+                catch (HttpListenerException e)
                 {
-                  break;
+                    Logger.Log(e.ToString());
+                    break;
                 }
-                catch(ObjectDisposedException e)
+                catch (ObjectDisposedException e)
                 {
+                    Logger.Log(e.ToString());
                     break;
                 }
                 catch (Exception e)
                 {
-                    Logger.Log("Something has went wrong with the listener");
+                    Logger.Log(e.ToString());
                 }
             }
         }
@@ -107,7 +110,7 @@ namespace Sistemsko_programiranje_projekat1
                     + "<button type=\"submit\">Search</button>"
                     + "</form>"
                 );
-                await sendDataToClient(null, context, 200,page);
+                await sendDataToClient(null, context, 200, page);
                 return;
             }
 
@@ -125,13 +128,19 @@ namespace Sistemsko_programiranje_projekat1
 
             String jsonDataAsString = String.Empty;
             EuropeanaMapper? mapper = null;
-
+            //inicijalizuj stopwatch
+            TimeSpan elapsedTime;
+            long startTime = Stopwatch.GetTimestamp();
 
             //Odma proveri u kes da li postoji
-            if (cache.checkForKey(query,out mapper))
+            if (cache.checkForKey(query, out mapper))
             {
+                elapsedTime = Stopwatch.GetElapsedTime(startTime);
                 Logger.Log("The query was found in the cache");
                 await sendDataToClient(mapper, context, 200);
+
+                Logger.Log($"Vreme potrebno za cache hit: {elapsedTime.TotalMilliseconds} ms");
+
                 return;
             }
 
@@ -139,15 +148,20 @@ namespace Sistemsko_programiranje_projekat1
             SemaphoreSlim semForQuery = queryE.GetOrAdd(query, (query) => new SemaphoreSlim(1));
             int codeSend;
             await semForQuery.WaitAsync(gracefulExitToken);
-            
+
             try
             {
-                if (!cache.checkForKey(query,out mapper))
+                if (!cache.checkForKey(query, out mapper))
                 {
 
                     Logger.Log("The query wasn't found in the cache");
 
-                    var response = await api.client.GetAsync(query,gracefulExitToken);
+                    startTime = Stopwatch.GetTimestamp();
+
+                    var response = await api.client.GetAsync(query, gracefulExitToken);
+
+                    elapsedTime = Stopwatch.GetElapsedTime(startTime);
+                    Logger.Log($"Vreme potrebno za cache miss/api call: {elapsedTime.TotalMilliseconds} ms");
 
                     if (response.IsSuccessStatusCode == false)
                     {
@@ -190,12 +204,13 @@ namespace Sistemsko_programiranje_projekat1
                 }
                 else
                 {
-                    responseHtml =  "<p>Failure while fetching from Europeana.</p>";
+                    responseHtml = "<p>Failure while fetching from Europeana.</p>";
                 }
 
-                await sendDataToClient(mapper, context, codeSend,responseHtml);
+                await sendDataToClient(mapper, context, codeSend, responseHtml);
+
             }
-            catch(OperationCanceledException e)
+            catch (OperationCanceledException e)
             {
                 Logger.Log("AAA");
             }
@@ -219,14 +234,14 @@ namespace Sistemsko_programiranje_projekat1
         }
 
 
-        public async Task sendDataToClient(EuropeanaMapper mapper,HttpListenerContext context,int statusCode,string response = " ")
+        public async Task sendDataToClient(EuropeanaMapper mapper, HttpListenerContext context, int statusCode, string response = " ")
         {
             context.Response.StatusCode = statusCode;
             if (statusCode == 200)
             {
                 context.Response.ContentType = "application/json";
                 await JsonSerializer.SerializeAsync(context.Response.OutputStream, mapper, new JsonSerializerOptions { WriteIndented = true }, gracefulExitToken);
-            }   
+            }
             else
             {
                 context.Response.ContentType = "text/html; charset=utf-8";
