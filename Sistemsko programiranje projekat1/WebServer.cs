@@ -20,6 +20,7 @@ namespace Sistemsko_programiranje_projekat1
         public ConcurrentDictionary<string, SemaphoreSlim> queryE;
         private CancellationTokenSource cls = new();
         private CancellationToken gracefulExitToken;
+        private List<Task> pendingTasks = new();
 
         public WebServer(AppSettings settings, string address)
         {
@@ -64,7 +65,20 @@ namespace Sistemsko_programiranje_projekat1
                 try
                 {
                     var context = await listener.GetContextAsync();
-                    var _ = Task.Run(() => asyncHandleRequest(context));
+                    // var _ = Task.Run(() => asyncHandleRequest(context));
+                    var task = asyncHandleRequest(context); //ovo jer trebamo da trackujemo task koj se napravi pozivom f.je
+                    lock (pendingTasks)
+                    {
+                        pendingTasks.Add(task);
+                    }
+                    //kad se task zavrsi
+                    _ = task.ContinueWith(t =>
+                    {
+                        lock (pendingTasks)
+                        {
+                            pendingTasks.Remove(t);
+                        }
+                    });
                 }
                 catch (HttpListenerException e)
                 {
@@ -81,6 +95,28 @@ namespace Sistemsko_programiranje_projekat1
                     Logger.Log(e.ToString());
                 }
             }
+
+
+            //ceka da se svaki rquest zavrsi
+            while (true)
+            {
+                Task[] toWait;
+                lock (pendingTasks)
+                {
+                    if(pendingTasks.Count == 0) break;
+                    toWait = pendingTasks.ToArray();
+                }
+                try
+                {
+                    await Task.WhenAll(toWait);
+                }
+                catch(Exception e)
+                {
+    
+                    Logger.Log(e.ToString());
+                }
+            }
+            Logger.Log("Shutdown");
         }
 
 
