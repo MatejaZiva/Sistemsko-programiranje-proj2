@@ -52,12 +52,16 @@ namespace Sistemsko_programiranje_projekat1
                 Console.WriteLine("The server couldn't start " + e.Message);
             }
 
-            Task.Run(() =>
+            var keyboardTask = Task.Run(() =>
             {
                 while (Console.ReadKey(true).Key != ConsoleKey.Z) { }
                 gracefulExit();
 
             });
+            lock (pendingTasks)
+            {
+                pendingTasks.Add(keyboardTask);
+            }
 
             while (true)
             {
@@ -97,22 +101,22 @@ namespace Sistemsko_programiranje_projekat1
             }
 
 
-            //ceka da se svaki rquest zavrsi
+            //ceka da se svaki rquest zavrsi ako shutdownujemo dok se nesto obradjuje
             while (true)
             {
                 Task[] toWait;
                 lock (pendingTasks)
                 {
-                    if(pendingTasks.Count == 0) break;
+                    if (pendingTasks.Count == 0) break;
                     toWait = pendingTasks.ToArray();
                 }
                 try
                 {
                     await Task.WhenAll(toWait);
                 }
-                catch(Exception e)
+                catch (Exception e)
                 {
-    
+
                     Logger.Log(e.ToString());
                 }
             }
@@ -137,16 +141,7 @@ namespace Sistemsko_programiranje_projekat1
             var keys = request.QueryString.AllKeys;
             if (keys.Length == 0 || string.IsNullOrWhiteSpace(request.QueryString["query"]))
             {
-                string page = CreateHtmlResponse(
-                    "Europeana Search",
-                    "<p>Use the <strong>query</strong> parameter to search the Europeana API.</p>"
-                    + "<p>Example: <a href=\"?query=Lisa\">?query=Lisa</a></p>"
-                    + "<form method=\"get\">"
-                    + "<label>Search query: <input name=\"query\" value=\"\" /></label>"
-                    + "<button type=\"submit\">Search</button>"
-                    + "</form>"
-                );
-                await sendDataToClient(null, context, 200, page);
+                await sendDataToClient(null, context, 200);
                 return;
             }
 
@@ -202,13 +197,12 @@ namespace Sistemsko_programiranje_projekat1
                     if (response.IsSuccessStatusCode == false)
                     {
                         codeSend = 500;
-                        await sendDataToClient(null, context, codeSend, "<p>Failure while fetching from Europeana.</p>\"");
+                        await sendDataToClient(null, context, codeSend);
                         throw new Eexceptions("The GET method has failed", codeSend);
-                        return;
                     }
 
                     jsonDataAsString = await response.Content.ReadAsStringAsync();
-                    //Za searilizaciju ne bih rekao da treba Task posto kao sta ce ti MIHALJO
+                    //Za searilizaciju ne bih rekao da treba Task posto kao sta ce ti MIHALJO. izvini :(
                     mapper = JsonSerializer.Deserialize<EuropeanaMapper>(jsonDataAsString);
                     if (mapper == null)
                     {
@@ -248,7 +242,7 @@ namespace Sistemsko_programiranje_projekat1
             }
             catch (OperationCanceledException e)
             {
-                Logger.Log("AAA");
+                Logger.Log(e.ToString());
             }
             catch (Eexceptions e)
             {
@@ -268,8 +262,6 @@ namespace Sistemsko_programiranje_projekat1
             }
 
         }
-
-
         public async Task sendDataToClient(EuropeanaMapper mapper, HttpListenerContext context, int statusCode, string response = " ")
         {
             context.Response.StatusCode = statusCode;
@@ -289,34 +281,6 @@ namespace Sistemsko_programiranje_projekat1
             }
             context.Response.Close();
 
-        }
-
-        private static string RenderJsonPage(string json)
-        {
-            string escaped = WebUtility.HtmlEncode(json);
-            return CreateHtmlResponse("Europeana result", $"<pre>{escaped}</pre>");
-        }
-
-        private static string CreateHtmlResponse(string title, string bodyHtml)
-        {
-            return "<!DOCTYPE html>\n"
-                + "<html lang=\"en\">\n"
-                + "<head>\n"
-                + "    <meta charset=\"utf-8\">\n"
-                + "    <title>" + WebUtility.HtmlEncode(title) + "</title>\n"
-                + "    <style>\n"
-                + "        body { font-family: Segoe UI, Arial, sans-serif; margin: 1rem; background: #f6f8fb; color: #1a1a1a; }\n"
-                + "        pre { background: #ffffff; border: 1px solid #d1d5db; padding: 1rem; overflow: auto; white-space: pre-wrap; word-wrap: break-word; }\n"
-                + "        a { color: #0366d6; text-decoration: none; }\n"
-                + "        a:hover { text-decoration: underline; }\n"
-                + "        button { margin-top: 0.5rem; padding: 0.5rem 1rem; }\n"
-                + "    </style>\n"
-                + "</head>\n"
-                + "<body>\n"
-                + "    <h1>" + WebUtility.HtmlEncode(title) + "</h1>\n"
-                + bodyHtml + "\n"
-                + "</body>\n"
-                + "</html>";
         }
     }
 }
