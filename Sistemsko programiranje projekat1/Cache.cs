@@ -82,7 +82,7 @@ namespace Sistemsko_programiranje_projekat1
                 cleanUpTask = Task.Run(async () =>
                 {
 
-                    var timer = new PeriodicTimer(TimeSpan.FromSeconds(25));
+                    var timer = new PeriodicTimer(TimeSpan.FromSeconds(1000*60*5));
 
                     while (await timer.WaitForNextTickAsync(cToken.Token))
                     {
@@ -101,14 +101,10 @@ namespace Sistemsko_programiranje_projekat1
             lockSlim.EnterWriteLock();
             try
             {
-                if (listOfKeys.Count > 0)
-                {
-                    string oldestKey = listOfKeys.Dequeue();
-                    cache.Remove(oldestKey);
-                    Logger.Log($"The oldest cache item was successfully cleaned : {oldestKey}");
-                }
+                cache.Clear();
+                listOfKeys.Clear();
+                Logger.Log("The cahce was successfully cleaned");
             }
-
             catch (Exception e)
             {
                 Console.WriteLine(e.Message);

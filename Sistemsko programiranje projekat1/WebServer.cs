@@ -2,13 +2,13 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics; //za stopwatch
 using System.Linq;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
-using System.Diagnostics; //za stopwatch
 
 namespace Sistemsko_programiranje_projekat1
 {
@@ -21,6 +21,9 @@ namespace Sistemsko_programiranje_projekat1
         private CancellationTokenSource cls = new();
         private CancellationToken gracefulExitToken;
         private List<Task> pendingTasks = new();
+        private QueryQueue requestQueue;
+        public List<Task> workerTasks = new();
+        public readonly int numberOfTasks;
 
         public WebServer(AppSettings settings, string address)
         {
@@ -31,6 +34,8 @@ namespace Sistemsko_programiranje_projekat1
             cache.startCleanCache();
             queryE = new ConcurrentDictionary<string, SemaphoreSlim>();
             gracefulExitToken = cls.Token;
+            requestQueue = new QueryQueue(settings.maxTasksAtOnce,gracefulExitToken);
+            numberOfTasks = settings.maxTasksAtOnce;
         }
 
         private void gracefulExit()
@@ -38,7 +43,6 @@ namespace Sistemsko_programiranje_projekat1
             Logger.Log("The server is gracefully shutting down");
             cls.Cancel();
             listener.Stop();
-            listener.Close();
         }
         public async Task asyncStartTheServer()
         {
@@ -52,16 +56,22 @@ namespace Sistemsko_programiranje_projekat1
                 Console.WriteLine("The server couldn't start " + e.Message);
             }
 
+            //Console.WriteLine(numberOfTasks);
+            for(int i=0; i<6;i++)
+            {
+                pendingTasks.Add(Task.Run(()=>WorkerLoopAsync()));
+            }
+
+            Console.WriteLine("Dodao sam tasks workes");
             var keyboardTask = Task.Run(() => //mozda ovde moze thread
             {
                 while (Console.ReadKey(true).Key != ConsoleKey.Z) { }
                 gracefulExit();
 
             });
-            lock (pendingTasks)
-            {
-                pendingTasks.Add(keyboardTask);
-            }
+
+
+            pendingTasks.Add(keyboardTask);
 
             while (true)
             {
@@ -69,29 +79,17 @@ namespace Sistemsko_programiranje_projekat1
                 try
                 {
                     var context = await listener.GetContextAsync();
-                    // var _ = Task.Run(() => asyncHandleRequest(context));
-                    var task = asyncHandleRequest(context); //ovo jer trebamo da trackujemo task koj se napravi pozivom f.je
-                    lock (pendingTasks)
-                    {
-                        pendingTasks.Add(task);
-                    }
-                    //kad se task zavrsi
-                    _ = task.ContinueWith(t =>
-                    {
-                        lock (pendingTasks)
-                        {
-                            pendingTasks.Remove(t);
-                        }
-                    });
+                    if (context.Request.Url?.ToString() == "http://localhost:8080/favicon.ico")
+                        continue;
+
+                    requestQueue.Add(context);
                 }
                 catch (HttpListenerException e)
                 {
-                    Logger.Log(e.ToString());
                     break;
                 }
                 catch (ObjectDisposedException e)
                 {
-                    Logger.Log(e.ToString());
                     break;
                 }
                 catch (Exception e)
@@ -102,25 +100,40 @@ namespace Sistemsko_programiranje_projekat1
 
 
             //ceka da se svaki rquest zavrsi ako shutdownujemo dok se nesto obradjuje
-            while (true)
+            try
             {
-                Task[] toWait;
-                lock (pendingTasks)
-                {
-                    if (pendingTasks.Count == 0) break;
-                    toWait = pendingTasks.ToArray();
-                }
+                await Task.WhenAll(pendingTasks); //WaitAll(blokirajuce)? grupise sve taskove i vraca jedan task koji se zavrsi samo kad se svi taskovi unutar njega zavrse
+            }
+            catch (Exception e)
+            {
+            
+            }
+            Logger.Log("Shutdown");
+            listener.Close();
+        }
+
+
+        public async Task WorkerLoopAsync()
+        {
+            while (!gracefulExitToken.IsCancellationRequested)
+            {
                 try
                 {
-                    await Task.WhenAll(toWait); //WaitAll(blokirajuce)? grupise sve taskove i vraca jedan task koji se zavrsi samo kad se svi taskovi unutar njega zavrse
+                    var context = await requestQueue.Remove();
+                    if (context != null)
+                    {
+                        await asyncHandleRequest(context);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
                 }
                 catch (Exception e)
                 {
-
-                    Logger.Log(e.ToString());
+                    Logger.Log("Greška u radniku: " + e.Message);
                 }
             }
-            Logger.Log("Shutdown");
         }
 
 
@@ -132,11 +145,6 @@ namespace Sistemsko_programiranje_projekat1
                 return;
 
             HttpListenerRequest request = context.Request;
-
-            //kada se napravi klijent sa browser-a request on zbog nekog razloga na pravi dva requesta
-            //i taj drugi request je ovaj dole string pa da bez potrebe pravi greske samo ce ga hardkodujem
-            if (context.Request.Url?.ToString() == "http://localhost:8080/favicon.ico")
-                return;
 
             var keys = request.QueryString.AllKeys;
             if (keys.Length == 0 || string.IsNullOrWhiteSpace(request.QueryString["query"]))
@@ -157,8 +165,8 @@ namespace Sistemsko_programiranje_projekat1
             string withoutKeyQuery = query;
             query += $"wskey={api.apiKey}";
 
-            String jsonDataAsString = String.Empty;
             EuropeanaMapper? mapper = null;
+
             //inicijalizuj stopwatch
             TimeSpan elapsedTime;
             long startTime = Stopwatch.GetTimestamp();
@@ -201,9 +209,9 @@ namespace Sistemsko_programiranje_projekat1
                         throw new Eexceptions("The GET method has failed", codeSend);
                     }
 
-                    jsonDataAsString = await response.Content.ReadAsStringAsync();
-                    //Za searilizaciju ne bih rekao da treba Task posto kao sta ce ti MIHALJO. izvini :(
-                    mapper = JsonSerializer.Deserialize<EuropeanaMapper>(jsonDataAsString);
+                    var stream = await response.Content.ReadAsStreamAsync();
+                    mapper = await  JsonSerializer.DeserializeAsync<EuropeanaMapper>(stream,new JsonSerializerOptions { PropertyNameCaseInsensitive = true},gracefulExitToken);
+
                     if (mapper == null)
                     {
                         throw new InvalidOperationException("Failed to deserialize Europeana response.");
@@ -242,7 +250,7 @@ namespace Sistemsko_programiranje_projekat1
             }
             catch (OperationCanceledException e)
             {
-                Logger.Log(e.ToString());
+                //Logger.Log(e.ToString());
             }
             catch (Eexceptions e)
             {

@@ -16,5 +16,5 @@ posto sad saljemo podatke po chunks ne pravimo json pa saljemo nego odma saljemo
 AppSettings set = new AppSettings();
 WebServer srv = new WebServer(set, "https://api.europeana.eu/record/v2/search.json");
 
-srv.asyncStartTheServer().Wait();
+await srv.asyncStartTheServer();
 

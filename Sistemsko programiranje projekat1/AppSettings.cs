@@ -13,6 +13,8 @@ namespace Sistemsko_programiranje_projekat1
         public string apiKey { get; set; }
         public string port { get; set; }
         public int maxCacheSize { get; set; }
+
+        public int maxTasksAtOnce { get; set; }
         public AppSettings(string port="8080")
         {
             bool optionalToAdd = false;
@@ -24,6 +26,7 @@ namespace Sistemsko_programiranje_projekat1
             
             this.apiKey = builder["apikey"];
             this.maxCacheSize = Convert.ToInt32(builder["maxCacheSize"]);
+            this.maxTasksAtOnce = Convert.ToInt32(builder["maxTasksAtOnce"])==0?6: Convert.ToInt32(builder["maxTasksAtOnce"]);
             this.port = port;
         }
     }
