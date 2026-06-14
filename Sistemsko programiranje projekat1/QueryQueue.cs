@@ -37,6 +37,7 @@ namespace Sistemsko_programiranje_projekat1
 
         public async Task<HttpListenerContext> Remove()
         {
+            
             await allowToEnqueue.WaitAsync(gracefulExitToken);
             lock (_lock)
             {

@@ -23,10 +23,11 @@ namespace Sistemsko_programiranje_projekat1
 
             var builder = new ConfigurationBuilder().SetBasePath(Directory.GetCurrentDirectory())
                 .AddJsonFile("appsettings.json",optionalToAdd,reloadIfChangeHappens).Build();
-            
+
             this.apiKey = builder["apikey"];
             this.maxCacheSize = Convert.ToInt32(builder["maxCacheSize"]);
-            this.maxTasksAtOnce = Convert.ToInt32(builder["maxTasksAtOnce"])==0?6: Convert.ToInt32(builder["maxTasksAtOnce"]);
+            int value = Convert.ToInt32(builder["maxTasksAtOnce"]);
+            this.maxTasksAtOnce = (value==0)? 6: value;
             this.port = port;
         }
     }

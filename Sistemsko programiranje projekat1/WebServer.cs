@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Microsoft.Extensions.Configuration;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -18,12 +19,14 @@ namespace Sistemsko_programiranje_projekat1
         public Cache cache;
         public Europeana api;
         public ConcurrentDictionary<string, SemaphoreSlim> queryE;
+        
         private CancellationTokenSource cls = new();
         private CancellationToken gracefulExitToken;
         private List<Task> pendingTasks = new();
         private QueryQueue requestQueue;
         public List<Task> workerTasks = new();
         public readonly int numberOfTasks;
+        private readonly object numberOfThreadsLock = new object();
 
         public WebServer(AppSettings settings, string address)
         {
@@ -53,16 +56,14 @@ namespace Sistemsko_programiranje_projekat1
             }
             catch (Exception e)
             {
-                Console.WriteLine("The server couldn't start " + e.Message);
+                Logger.Log("The server couldn't start " + e.Message);
             }
 
-            //Console.WriteLine(numberOfTasks);
-            for(int i=0; i<6;i++)
+            for(int i=0; i<numberOfTasks;i++)
             {
                 pendingTasks.Add(Task.Run(()=>WorkerLoopAsync()));
             }
 
-            Console.WriteLine("Dodao sam tasks workes");
             var keyboardTask = Task.Run(() => //mozda ovde moze thread
             {
                 while (Console.ReadKey(true).Key != ConsoleKey.Z) { }
@@ -81,7 +82,6 @@ namespace Sistemsko_programiranje_projekat1
                     var context = await listener.GetContextAsync();
                     if (context.Request.Url?.ToString() == "http://localhost:8080/favicon.ico")
                         continue;
-
                     requestQueue.Add(context);
                 }
                 catch (HttpListenerException e)
@@ -183,9 +183,10 @@ namespace Sistemsko_programiranje_projekat1
                 return;
             }
 
+            int codeSend;
             //Posto nema u kes onda mora da vidi dal postoji semafor za njega
             SemaphoreSlim semForQuery = queryE.GetOrAdd(query, (query) => new SemaphoreSlim(1));
-            int codeSend;
+            
             await semForQuery.WaitAsync(gracefulExitToken);
 
             try
