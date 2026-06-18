@@ -82,7 +82,7 @@ namespace Sistemsko_programiranje_projekat1
                 cleanUpTask = Task.Run(async () =>
                 {
 
-                    var timer = new PeriodicTimer(TimeSpan.FromSeconds(1000*60*5));
+                    var timer = new PeriodicTimer(TimeSpan.FromMinutes(3));
 
                     while (await timer.WaitForNextTickAsync(cToken.Token))
                     {

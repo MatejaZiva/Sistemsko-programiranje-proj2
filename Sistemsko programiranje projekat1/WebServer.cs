@@ -19,6 +19,7 @@ namespace Sistemsko_programiranje_projekat1
         public Cache cache;
         public Europeana api;
         public ConcurrentDictionary<string, SemaphoreSlim> queryE;
+        //public ConcurrentDictionary<string, QuerySemaphore> queryE;
         
         private CancellationTokenSource cls = new();
         private CancellationToken gracefulExitToken;
@@ -26,7 +27,7 @@ namespace Sistemsko_programiranje_projekat1
         private QueryQueue requestQueue;
         public List<Task> workerTasks = new();
         public readonly int numberOfTasks;
-        private readonly object numberOfThreadsLock = new object();
+        private SemaphoreSlim threadLimit;
 
         public WebServer(AppSettings settings, string address)
         {
@@ -36,9 +37,11 @@ namespace Sistemsko_programiranje_projekat1
             cache = new Cache(settings.maxCacheSize);
             cache.startCleanCache();
             queryE = new ConcurrentDictionary<string, SemaphoreSlim>();
+            //queryE = new ConcurrentDictionary<string, QuerySemaphore>();
             gracefulExitToken = cls.Token;
             requestQueue = new QueryQueue(settings.maxTasksAtOnce,gracefulExitToken);
             numberOfTasks = settings.maxTasksAtOnce;
+            threadLimit = new SemaphoreSlim(numberOfTasks);
         }
 
         private void gracefulExit()
@@ -59,10 +62,12 @@ namespace Sistemsko_programiranje_projekat1
                 Logger.Log("The server couldn't start " + e.Message);
             }
 
-            for(int i=0; i<numberOfTasks;i++)
-            {
-                pendingTasks.Add(Task.Run(()=>WorkerLoopAsync()));
-            }
+            pendingTasks.Add(DispatcherLoopAsync());
+
+            //for(int i=0; i<numberOfTasks;i++)
+            //{
+            //pendingTasks.Add(Task.Run(()=>WorkerLoopAsync()));
+            //}
 
             var keyboardTask = Task.Run(() => //mozda ovde moze thread
             {
@@ -113,12 +118,36 @@ namespace Sistemsko_programiranje_projekat1
         }
 
 
+        public async Task DispatcherLoopAsync()
+        {
+            while (!gracefulExitToken.IsCancellationRequested)
+            {
+                try
+                {
+                    Console.WriteLine("Dispatcher");
+                    var context = await requestQueue.Remove();
+                    if (context != null)
+                    {
+                        _ = asyncHandleRequest(context).ContinueWith((t) =>
+                        { 
+                            threadLimit.Release();
+                        }
+                        ); 
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+        }
         public async Task WorkerLoopAsync()
         {
             while (!gracefulExitToken.IsCancellationRequested)
             {
                 try
                 {
+
                     var context = await requestQueue.Remove();
                     if (context != null)
                     {
@@ -136,9 +165,9 @@ namespace Sistemsko_programiranje_projekat1
             }
         }
 
-
         public async Task asyncHandleRequest(Object? obj)
         {
+            await threadLimit.WaitAsync(gracefulExitToken);
 
             gracefulExitToken.ThrowIfCancellationRequested();
             if (obj is not HttpListenerContext context)
@@ -186,8 +215,10 @@ namespace Sistemsko_programiranje_projekat1
             int codeSend;
             //Posto nema u kes onda mora da vidi dal postoji semafor za njega
             SemaphoreSlim semForQuery = queryE.GetOrAdd(query, (query) => new SemaphoreSlim(1));
-            
+            //QuerySemaphore semForQuery = queryE.GetOrAdd(query, (query) => new QuerySemaphore());
+
             await semForQuery.WaitAsync(gracefulExitToken);
+            //await semForQuery.semaphore.WaitAsync(gracefulExitToken);
 
             try
             {
@@ -264,6 +295,7 @@ namespace Sistemsko_programiranje_projekat1
             finally
             {
                 semForQuery.Release();
+                //semForQuery.semaphore.Release(semForQuery.getWorkers() +1);
                 if (semForQuery.CurrentCount == 1)
                 {
                     queryE.TryRemove(query, out _);
