@@ -89,6 +89,16 @@ namespace Sistemsko_programiranje_projekat1
                     Logger.Log("ObjectDisposedException" + e.ToString());
                     break;
                 }
+                catch (TaskCanceledException)
+                {
+                    Logger.Log("Task canceled (shutdown)");
+                    break;
+                }
+                catch (IOException)
+                {
+                    Logger.Log("IO aborted (shutdown)");
+                    break;
+                }
                 catch (Exception e)
                 {
                     Logger.Log(e.ToString());
@@ -109,13 +119,13 @@ namespace Sistemsko_programiranje_projekat1
         }
 
 
-        public async Task DispatcherLoopAsync()
+        public async Task 
+            DispatcherLoopAsync()
         {
             while (!gracefulExitToken.IsCancellationRequested)
             {
                 try
                 {
-                    Console.WriteLine("Dispatcher");
 
                     await threadLimit.WaitAsync(gracefulExitToken);
 
@@ -250,11 +260,12 @@ namespace Sistemsko_programiranje_projekat1
             }
             catch (OperationCanceledException e)
             {
-                Logger.Log(e.ToString());
+                //nemo ovo jer izbacuje veliki stack trace
+                //Logger.Log(e.ToString());
             }
             catch (Eexceptions e)
             {
-                Logger.Log($"An error has occured: {e.Message} {e.errorCode}");
+                //Logger.Log($"An error has occured: {e.Message} {e.errorCode}");
                 await sendDataToClient(null, context, e.errorCode);
             }
             catch (Exception e)
