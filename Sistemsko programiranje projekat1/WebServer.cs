@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics; //za stopwatch
+using System.Diagnostics.Tracing;
 using System.Linq;
 using System.Net;
 using System.Net.Http.Json;
@@ -24,7 +25,6 @@ namespace Sistemsko_programiranje_projekat1
         private CancellationToken gracefulExitToken;
         private List<Task> pendingTasks = new();
         private QueryQueue requestQueue;
-        public readonly int numberOfTasks;
         private SemaphoreSlim threadLimit;
 
         public WebServer(AppSettings settings, string address)
@@ -36,8 +36,7 @@ namespace Sistemsko_programiranje_projekat1
             cache.startCleanCache();
             gracefulExitToken = cls.Token;
             requestQueue = new QueryQueue(settings.maxTasksAtOnce, gracefulExitToken);
-            numberOfTasks = settings.maxTasksAtOnce;
-            threadLimit = new SemaphoreSlim(numberOfTasks);
+            threadLimit = new SemaphoreSlim(settings.maxTasksAtOnce);
         }
 
         private void gracefulExit()
@@ -59,7 +58,7 @@ namespace Sistemsko_programiranje_projekat1
                 Logger.Log("The server couldn't start " + e.Message);
             }
 
-            pendingTasks.Add(DispatcherLoopAsync());
+            _ = DispatcherLoopAsync();
 
             var keyboardThread = new Thread(() =>
             {
@@ -117,50 +116,37 @@ namespace Sistemsko_programiranje_projekat1
                 try
                 {
                     Console.WriteLine("Dispatcher");
-                    var context = await requestQueue.Remove();
-                    if (context != null)
-                    {
-                        _ = asyncHandleRequest(context).ContinueWith((t) =>
-                        {
-                            threadLimit.Release();
-                        }
-                        );
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-            }
-        }
-        public async Task WorkerLoopAsync()
-        {
-            while (!gracefulExitToken.IsCancellationRequested)
-            {
-                try
-                {
+
+                    await threadLimit.WaitAsync(gracefulExitToken);
 
                     var context = await requestQueue.Remove();
                     if (context != null)
                     {
-                        await asyncHandleRequest(context);
+                        Task requestTask = asyncHandleRequest(context);
+                        _ = requestTask.ContinueWith((t) =>
+                        {
+                            threadLimit.Release();
+                        }, TaskContinuationOptions.ExecuteSynchronously);
+
+                        lock(pendingTasks)
+                        {
+                            pendingTasks.Add(requestTask);
+                        }
+                    }
+                    else
+                    {
+                        threadLimit.Release();
                     }
                 }
                 catch (OperationCanceledException)
                 {
                     break;
-                }
-                catch (Exception e)
-                {
-                    if (cls.IsCancellationRequested) break;
-                    Logger.Log("Greška u radniku: " + e.Message);
                 }
             }
         }
 
         public async Task asyncHandleRequest(Object? obj)
         {
-            await threadLimit.WaitAsync(gracefulExitToken);
 
             gracefulExitToken.ThrowIfCancellationRequested();
             if (obj is not HttpListenerContext context)
@@ -204,12 +190,11 @@ namespace Sistemsko_programiranje_projekat1
                 return;
             }
 
+            bool coalescedHit = true;
             int codeSend = 200;
 
             try
             {
-                // TASK COALESCING: Multiple identical queries wait on the exact same Task reference.
-                // The dictionary factory block only executes ONCE for the stampede.
                 mapper = await queryE.GetOrAdd(query, async (key) =>
                 {
                     if (cache.checkForKey(key, out var cachedMapper))
@@ -217,6 +202,7 @@ namespace Sistemsko_programiranje_projekat1
                         return cachedMapper;
                     }
 
+                    coalescedHit = false;
                     Logger.Log("The query wasn't found in the cache");
 
                     startTime = Stopwatch.GetTimestamp();
@@ -254,7 +240,7 @@ namespace Sistemsko_programiranje_projekat1
                     return result;
                 });
 
-                if (codeSend != 500 && codeSend != 404)
+                if (coalescedHit && codeSend != 500 && codeSend != 404)
                 {
                     Logger.Log("The query was found in the cache");
                     codeSend = 200;
