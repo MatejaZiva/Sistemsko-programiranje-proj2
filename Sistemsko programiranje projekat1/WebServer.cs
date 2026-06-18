@@ -20,7 +20,7 @@ namespace Sistemsko_programiranje_projekat1
         public Europeana api;
         public ConcurrentDictionary<string, SemaphoreSlim> queryE;
         //public ConcurrentDictionary<string, QuerySemaphore> queryE;
-        
+
         private CancellationTokenSource cls = new();
         private CancellationToken gracefulExitToken;
         private List<Task> pendingTasks = new();
@@ -39,7 +39,7 @@ namespace Sistemsko_programiranje_projekat1
             queryE = new ConcurrentDictionary<string, SemaphoreSlim>();
             //queryE = new ConcurrentDictionary<string, QuerySemaphore>();
             gracefulExitToken = cls.Token;
-            requestQueue = new QueryQueue(settings.maxTasksAtOnce,gracefulExitToken);
+            requestQueue = new QueryQueue(settings.maxTasksAtOnce, gracefulExitToken);
             numberOfTasks = settings.maxTasksAtOnce;
             threadLimit = new SemaphoreSlim(numberOfTasks);
         }
@@ -48,8 +48,9 @@ namespace Sistemsko_programiranje_projekat1
         {
             Logger.Log("The server is gracefully shutting down");
             cls.Cancel();
-            listener.Stop();
+            listener.Close();
         }
+
         public async Task asyncStartTheServer()
         {
             try
@@ -64,20 +65,14 @@ namespace Sistemsko_programiranje_projekat1
 
             pendingTasks.Add(DispatcherLoopAsync());
 
-            //for(int i=0; i<numberOfTasks;i++)
-            //{
-            //pendingTasks.Add(Task.Run(()=>WorkerLoopAsync()));
-            //}
-
-            var keyboardTask = Task.Run(() => //mozda ovde moze thread
+            var keyboardThread = new Thread(() =>
             {
-                while (Console.ReadKey(true).Key != ConsoleKey.Z) { }
+                // while (Console.ReadKey(true).Key != ConsoleKey.Z) { } //samo "z" za exit (ima problema zbog watch run)
+                while (Console.ReadLine()?.Trim().ToLower() != "z") { } // z + enter (uvek radi)
                 gracefulExit();
-
-            });
-
-
-            pendingTasks.Add(keyboardTask);
+            })
+            { IsBackground = true };
+            keyboardThread.Start();
 
             while (true)
             {
@@ -89,12 +84,14 @@ namespace Sistemsko_programiranje_projekat1
                         continue;
                     requestQueue.Add(context);
                 }
-                catch (HttpListenerException e)
+                catch (HttpListenerException)
                 {
+                    Logger.Log("HttpListenerException: request za exit");
                     break;
                 }
                 catch (ObjectDisposedException e)
                 {
+                    Logger.Log("ObjectDisposedException" + e.ToString());
                     break;
                 }
                 catch (Exception e)
@@ -107,14 +104,13 @@ namespace Sistemsko_programiranje_projekat1
             //ceka da se svaki rquest zavrsi ako shutdownujemo dok se nesto obradjuje
             try
             {
-                await Task.WhenAll(pendingTasks); //WaitAll(blokirajuce)? grupise sve taskove i vraca jedan task koji se zavrsi samo kad se svi taskovi unutar njega zavrse
+                await Task.WhenAll(pendingTasks);
             }
             catch (Exception e)
             {
-            
+                Logger.Log("exc" + e);
             }
             Logger.Log("Shutdown");
-            listener.Close();
         }
 
 
@@ -129,10 +125,10 @@ namespace Sistemsko_programiranje_projekat1
                     if (context != null)
                     {
                         _ = asyncHandleRequest(context).ContinueWith((t) =>
-                        { 
+                        {
                             threadLimit.Release();
                         }
-                        ); 
+                        );
                     }
                 }
                 catch (OperationCanceledException)
@@ -160,6 +156,7 @@ namespace Sistemsko_programiranje_projekat1
                 }
                 catch (Exception e)
                 {
+                    if (cls.IsCancellationRequested) break;
                     Logger.Log("Greška u radniku: " + e.Message);
                 }
             }
@@ -242,7 +239,7 @@ namespace Sistemsko_programiranje_projekat1
                     }
 
                     var stream = await response.Content.ReadAsStreamAsync();
-                    mapper = await  JsonSerializer.DeserializeAsync<EuropeanaMapper>(stream,new JsonSerializerOptions { PropertyNameCaseInsensitive = true},gracefulExitToken);
+                    mapper = await JsonSerializer.DeserializeAsync<EuropeanaMapper>(stream, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, gracefulExitToken);
 
                     if (mapper == null)
                     {
@@ -267,22 +264,12 @@ namespace Sistemsko_programiranje_projekat1
                     codeSend = 200;
                 }
 
-                string responseHtml;
-                if (codeSend == 404)
-                {
-                    responseHtml = $"The query: {withoutKeyQuery.Remove(withoutKeyQuery.Length - 1)} is not valid";
-                }
-                else
-                {
-                    responseHtml = "<p>Failure while fetching from Europeana.</p>";
-                }
-
-                await sendDataToClient(mapper, context, codeSend, responseHtml);
+                await sendDataToClient(mapper, context, codeSend);
 
             }
             catch (OperationCanceledException e)
             {
-                //Logger.Log(e.ToString());
+                Logger.Log(e.ToString());
             }
             catch (Eexceptions e)
             {

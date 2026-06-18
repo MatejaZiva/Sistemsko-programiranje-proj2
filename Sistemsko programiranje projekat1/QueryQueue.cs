@@ -19,7 +19,7 @@ namespace Sistemsko_programiranje_projekat1
 
         public QueryQueue(int count, CancellationToken token) 
         {
-            allowToEnqueue = new SemaphoreSlim(0);
+            allowToEnqueue = new SemaphoreSlim(0, int.MaxValue);
             queue = new Queue<HttpListenerContext>();
             gracefulExitToken = token;
         }
@@ -41,7 +41,8 @@ namespace Sistemsko_programiranje_projekat1
             await allowToEnqueue.WaitAsync(gracefulExitToken);
             lock (_lock)
             {
-               return queue.Dequeue();
+                if(queue.Count == 0) return null;
+                return queue.Dequeue();
             }
         }
 
