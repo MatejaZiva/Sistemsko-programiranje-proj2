@@ -202,7 +202,7 @@ namespace Sistemsko_programiranje_projekat1
 
             bool coalescedHit = true;
             int codeSend = 200;
-
+            string sendErrorResponse = "";
             try
             {
                 mapper = await queryE.GetOrAdd(query, async (key) =>
@@ -225,6 +225,7 @@ namespace Sistemsko_programiranje_projekat1
                     if (response.IsSuccessStatusCode == false)
                     {
                         codeSend = 500;
+                        sendErrorResponse = $"The GET method has failed";
                         throw new Eexceptions("The GET method has failed", codeSend);
                     }
 
@@ -238,7 +239,8 @@ namespace Sistemsko_programiranje_projekat1
 
                     if (result.itemsCount == 0)
                     {
-                        Logger.Log($"The query: {key} is not valid");
+                        Logger.Log($"The query: {withoutKeyQuery} is not valid");
+                        sendErrorResponse = $"The query: {withoutKeyQuery} is not valid";
                         codeSend = 404;
                     }
                     else
@@ -256,7 +258,7 @@ namespace Sistemsko_programiranje_projekat1
                     codeSend = 200;
                 }
 
-                await sendDataToClient(mapper, context, codeSend);
+                await sendDataToClient(mapper, context, codeSend,sendErrorResponse);
             }
             catch (OperationCanceledException e)
             {
@@ -288,7 +290,9 @@ namespace Sistemsko_programiranje_projekat1
             else
             {
                 context.Response.ContentType = "text/html; charset=utf-8";
-
+                Console.WriteLine(statusCode);
+                Console.WriteLine(response);
+                
                 byte[] buffer = Encoding.UTF8.GetBytes(response);
                 context.Response.ContentLength64 = buffer.Length;
 
