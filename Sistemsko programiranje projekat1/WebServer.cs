@@ -18,8 +18,7 @@ namespace Sistemsko_programiranje_projekat1
         public HttpListener listener;
         public Cache cache;
         public Europeana api;
-        public ConcurrentDictionary<string, SemaphoreSlim> queryE;
-        //public ConcurrentDictionary<string, QuerySemaphore> queryE;
+        private readonly ConcurrentDictionary<string, Task<EuropeanaMapper?>> queryE = new();
 
         private CancellationTokenSource cls = new();
         private CancellationToken gracefulExitToken;
@@ -36,7 +35,7 @@ namespace Sistemsko_programiranje_projekat1
             api = new Europeana(address, settings);
             cache = new Cache(settings.maxCacheSize);
             cache.startCleanCache();
-            queryE = new ConcurrentDictionary<string, SemaphoreSlim>();
+            queryE = new ConcurrentDictionary<string, Task<EuropeanaMapper?>>();
             //queryE = new ConcurrentDictionary<string, QuerySemaphore>();
             gracefulExitToken = cls.Token;
             requestQueue = new QueryQueue(settings.maxTasksAtOnce, gracefulExitToken);
@@ -205,28 +204,27 @@ namespace Sistemsko_programiranje_projekat1
                 await sendDataToClient(mapper, context, 200);
 
                 Logger.Log($"Vreme potrebno za cache hit: {elapsedTime.TotalMilliseconds} ms");
-
                 return;
             }
 
-            int codeSend;
-            //Posto nema u kes onda mora da vidi dal postoji semafor za njega
-            SemaphoreSlim semForQuery = queryE.GetOrAdd(query, (query) => new SemaphoreSlim(1));
-            //QuerySemaphore semForQuery = queryE.GetOrAdd(query, (query) => new QuerySemaphore());
-
-            await semForQuery.WaitAsync(gracefulExitToken);
-            //await semForQuery.semaphore.WaitAsync(gracefulExitToken);
+            int codeSend = 200;
 
             try
             {
-                if (!cache.checkForKey(query, out mapper))
+                // TASK COALESCING: Multiple identical queries wait on the exact same Task reference.
+                // The dictionary factory block only executes ONCE for the stampede.
+                mapper = await queryE.GetOrAdd(query, async (key) =>
                 {
+                    if (cache.checkForKey(key, out var cachedMapper))
+                    {
+                        return cachedMapper;
+                    }
 
                     Logger.Log("The query wasn't found in the cache");
 
                     startTime = Stopwatch.GetTimestamp();
 
-                    var response = await api.client.GetAsync(query, gracefulExitToken);
+                    var response = await api.client.GetAsync(key, gracefulExitToken);
 
                     elapsedTime = Stopwatch.GetElapsedTime(startTime);
                     Logger.Log($"Vreme potrebno za cache miss/api call: {elapsedTime.TotalMilliseconds} ms");
@@ -234,38 +232,38 @@ namespace Sistemsko_programiranje_projekat1
                     if (response.IsSuccessStatusCode == false)
                     {
                         codeSend = 500;
-                        await sendDataToClient(null, context, codeSend);
                         throw new Eexceptions("The GET method has failed", codeSend);
                     }
 
                     var stream = await response.Content.ReadAsStreamAsync();
-                    mapper = await JsonSerializer.DeserializeAsync<EuropeanaMapper>(stream, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, gracefulExitToken);
+                    var result = await JsonSerializer.DeserializeAsync<EuropeanaMapper>(stream, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, gracefulExitToken);
 
-                    if (mapper == null)
+                    if (result == null)
                     {
                         throw new InvalidOperationException("Failed to deserialize Europeana response.");
                     }
 
-                    if (mapper.itemsCount == 0)
+                    if (result.itemsCount == 0)
                     {
-                        Logger.Log($"The query: {query} is not valid");
+                        Logger.Log($"The query: {key} is not valid");
                         codeSend = 404;
                     }
                     else
                     {
-                        cache.addToCache(query, mapper);
+                        cache.addToCache(key, result);
                         codeSend = 200;
                     }
 
-                }
-                else
+                    return result;
+                });
+
+                if (codeSend != 500 && codeSend != 404)
                 {
                     Logger.Log("The query was found in the cache");
                     codeSend = 200;
                 }
 
                 await sendDataToClient(mapper, context, codeSend);
-
             }
             catch (OperationCanceledException e)
             {
@@ -274,6 +272,7 @@ namespace Sistemsko_programiranje_projekat1
             catch (Eexceptions e)
             {
                 Logger.Log($"An error has occured: {e.Message} {e.errorCode}");
+                await sendDataToClient(null, context, e.errorCode);
             }
             catch (Exception e)
             {
@@ -281,14 +280,8 @@ namespace Sistemsko_programiranje_projekat1
             }
             finally
             {
-                semForQuery.Release();
-                //semForQuery.semaphore.Release(semForQuery.getWorkers() +1);
-                if (semForQuery.CurrentCount == 1)
-                {
-                    queryE.TryRemove(query, out _);
-                }
+                queryE.TryRemove(query, out _);
             }
-
         }
         public async Task sendDataToClient(EuropeanaMapper mapper, HttpListenerContext context, int statusCode, string response = " ")
         {
