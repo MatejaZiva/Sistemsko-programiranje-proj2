@@ -24,7 +24,6 @@ namespace Sistemsko_programiranje_projekat1
         private CancellationToken gracefulExitToken;
         private List<Task> pendingTasks = new();
         private QueryQueue requestQueue;
-        public List<Task> workerTasks = new();
         public readonly int numberOfTasks;
         private SemaphoreSlim threadLimit;
 
@@ -35,8 +34,6 @@ namespace Sistemsko_programiranje_projekat1
             api = new Europeana(address, settings);
             cache = new Cache(settings.maxCacheSize);
             cache.startCleanCache();
-            queryE = new ConcurrentDictionary<string, Task<EuropeanaMapper?>>();
-            //queryE = new ConcurrentDictionary<string, QuerySemaphore>();
             gracefulExitToken = cls.Token;
             requestQueue = new QueryQueue(settings.maxTasksAtOnce, gracefulExitToken);
             numberOfTasks = settings.maxTasksAtOnce;
